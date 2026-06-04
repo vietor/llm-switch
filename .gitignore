@@ -1,0 +1,7 @@
+GPATH
+GTAGS
+GRTAGS
+
+node_modules/
+dist/
+

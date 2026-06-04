@@ -1,11 +1,14 @@
 {
-  "name": "ugly-llm",
+  "name": "llm-switch",
   "version": "1.0.0",
-  "description": "Ugly LLM API proxy service",
-  "main": "index.js",
+  "private": true,
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc && node dist/index.js"
   },
-  "author": "",
-  "license": "ISC"
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
 }
