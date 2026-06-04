@@ -3,7 +3,7 @@ import https from "node:https";
 
 import { LLMConfig } from "./llm-config.js";
 
-function isSystem(msg: unknown): msg is { role: string; content: unknown } {
+function isSystem(msg: unknown): msg is Record<string, unknown> {
   return (
     typeof msg === "object" &&
     msg !== null &&
@@ -17,7 +17,8 @@ function msgContent(msg: { content: unknown }): string {
     const parts: string[] = [];
     for (const p of msg.content) {
       if (
-        typeof p === "object" && p !== null &&
+        typeof p === "object" &&
+        p !== null &&
         (p as Record<string, unknown>).type === "text"
       ) {
         parts.push((p as Record<string, unknown>).text as string);
@@ -44,7 +45,7 @@ function rewriteAnthropic(raw: string): string | null {
 
   for (const msg of messages) {
     if (isSystem(msg)) {
-      systemParts.push(msgContent(msg));
+      systemParts.push(msgContent(msg as { content: unknown }));
     } else {
       cleaned.push(msg);
     }
@@ -99,7 +100,9 @@ function requestToChat(body: Record<string, unknown>): Record<string, unknown> {
   return result;
 }
 
-function chatToResponse(chat: Record<string, unknown>): Record<string, unknown> {
+function chatToResponse(
+  chat: Record<string, unknown>,
+): Record<string, unknown> {
   const choices = chat.choices as Record<string, unknown>[] | undefined;
   const output: Record<string, unknown>[] = [];
 
@@ -109,7 +112,11 @@ function chatToResponse(chat: Record<string, unknown>): Record<string, unknown> 
       const content: Record<string, unknown>[] = [];
 
       if (typeof message.content === "string" && message.content.length > 0) {
-        content.push({ type: "output_text", text: message.content, annotations: [] });
+        content.push({
+          type: "output_text",
+          text: message.content,
+          annotations: [],
+        });
       }
 
       if (Array.isArray(message.tool_calls)) {
@@ -117,7 +124,11 @@ function chatToResponse(chat: Record<string, unknown>): Record<string, unknown> 
           const fn = (tc.function || tc) as Record<string, unknown>;
           let args: unknown = fn.arguments;
           if (typeof fn.arguments === "string") {
-            try { args = JSON.parse(fn.arguments); } catch { /* keep raw */ }
+            try {
+              args = JSON.parse(fn.arguments);
+            } catch {
+              /* keep raw */
+            }
           }
           content.push({
             type: "function_call",
@@ -128,7 +139,13 @@ function chatToResponse(chat: Record<string, unknown>): Record<string, unknown> 
         }
       }
 
-      output.push({ type: "message", id: "msg_" + String(chat.id || ""), status: "completed", role: "assistant", content });
+      output.push({
+        type: "message",
+        id: "msg_" + String(chat.id || ""),
+        status: "completed",
+        role: "assistant",
+        content,
+      });
     }
   }
 
@@ -144,24 +161,30 @@ function chatToResponse(chat: Record<string, unknown>): Record<string, unknown> 
 }
 
 const BLOCKED_HEADERS = new Set([
-  "host", "content-length", "connection", "keep-alive",
-  "transfer-encoding", "authorization",
+  "host",
+  "content-length",
+  "connection",
+  "keep-alive",
+  "transfer-encoding",
+  "authorization",
 ]);
 
 class ProxyForwarder {
   private hostname: string;
   private port: number;
   private httpModule: typeof http | typeof https;
-  private hookApiKey: string;
+  private rewriteApiKey: string;
 
   constructor(baseUrl: string, apiKey: string) {
     const url = new URL(baseUrl);
     this.hostname = url.hostname;
     this.port = url.port
       ? parseInt(url.port, 10)
-      : url.protocol === "https:" ? 443 : 80;
+      : url.protocol === "https:"
+        ? 443
+        : 80;
     this.httpModule = url.protocol === "https:" ? https : http;
-    this.hookApiKey = apiKey;
+    this.rewriteApiKey = apiKey;
   }
 
   pipe(
@@ -194,9 +217,14 @@ class ProxyForwarder {
       proxyRes.on("data", (chunk: Buffer) => chunks.push(chunk));
       proxyRes.on("end", () => {
         const raw = Buffer.concat(chunks).toString();
-        const out = statusCode >= 400
-          ? raw
-          : (() => { try { return onSuccess(raw); } catch { return raw; } })();
+        let out = raw;
+        if (statusCode < 400) {
+          try {
+            out = onSuccess(raw);
+          } catch {
+            /* fallback to raw */
+          }
+        }
         res.writeHead(statusCode, { "Content-Type": "application/json" });
         res.end(out);
       });
@@ -232,7 +260,9 @@ class ProxyForwarder {
         headers: {
           ...this.filterHeaders(req.headers),
           "Content-Length": Buffer.byteLength(body).toString(),
-          ...(this.hookApiKey ? { Authorization: `Bearer ${this.hookApiKey}` } : {}),
+          ...(this.rewriteApiKey
+            ? { Authorization: `Bearer ${this.rewriteApiKey}` }
+            : {}),
         },
       },
       onResponse,
@@ -257,11 +287,15 @@ function setModel(body: string, model: string): string {
 
 export class LLMBridge {
   private forwarder: ProxyForwarder;
-  private defaultModel: string;
+  private anthropicForwarder?: ProxyForwarder;
+  private rewriteModel: string;
 
   constructor(config: LLMConfig) {
     this.forwarder = new ProxyForwarder(config.baseUrl, config.apiKey);
-    this.defaultModel = config.defaultModel;
+    this.anthropicForwarder = config.anthropicBaseUrl
+      ? new ProxyForwarder(config.anthropicBaseUrl, config.apiKey)
+      : undefined;
+    this.rewriteModel = config.model;
   }
 
   createServer(): http.Server {
@@ -284,14 +318,12 @@ export class LLMBridge {
     raw: string,
   ): void {
     const url = req.url;
-
-    console.log(url);
     if (!url) {
       res.writeHead(400).end("Missing URL");
       return;
     }
 
-    if (url.startsWith("/responses")) {
+    if (url.startsWith("/responses") || url.startsWith("/v1/responses")) {
       let parsed: Record<string, unknown>;
       try {
         parsed = JSON.parse(raw);
@@ -301,20 +333,23 @@ export class LLMBridge {
         return;
       }
       const chatReq = requestToChat(parsed);
-      if (this.defaultModel) chatReq.model = this.defaultModel;
-      this.forwarder.buffer(req, res, JSON.stringify(chatReq), "/v1/chat/completions", (rawResp) =>
-        JSON.stringify(chatToResponse(JSON.parse(rawResp))),
+      if (this.rewriteModel) chatReq.model = this.rewriteModel;
+      this.forwarder.buffer(
+        req,
+        res,
+        JSON.stringify(chatReq),
+        "/v1/chat/completions",
+        (rawResp) => JSON.stringify(chatToResponse(JSON.parse(rawResp))),
       );
-      return;
+    } else {
+      let body = raw;
+      let forwarder = this.forwarder;
+      if (url.startsWith("/anthropic")) {
+        body = rewriteAnthropic(raw) ?? raw;
+        if (this.anthropicForwarder) forwarder = this.anthropicForwarder;
+      }
+      if (this.rewriteModel) body = setModel(body, this.rewriteModel);
+      forwarder.pipe(req, res, body, url);
     }
-
-    let body = raw;
-    if (url.startsWith("/anthropic")) {
-      const rewritten = rewriteAnthropic(raw);
-      body = rewritten ?? raw;
-    }
-
-    if (this.defaultModel) body = setModel(body, this.defaultModel);
-    this.forwarder.pipe(req, res, body, url);
   }
 }

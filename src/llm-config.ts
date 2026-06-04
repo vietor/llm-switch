@@ -7,8 +7,9 @@ const SETTINGS_FILE = ".llm-switch.json";
 export class LLMConfig {
   readonly port: number;
   readonly baseUrl: string;
+  readonly anthropicBaseUrl: string;
   readonly apiKey: string;
-  readonly defaultModel: string;
+  readonly model: string;
 
   constructor() {
     const settingsPath = path.join(os.homedir(), SETTINGS_FILE);
@@ -20,15 +21,16 @@ export class LLMConfig {
     }
     this.port = cfg.port ?? 3000;
     this.baseUrl = cfg.baseUrl ?? "";
+    this.anthropicBaseUrl = cfg.anthropicBaseUrl ?? "";
     this.apiKey = cfg.apiKey ?? "";
-    this.defaultModel = cfg.defaultModel ?? "";
+    this.model = cfg.model ?? "";
   }
 
   validate(): void {
     const missing: string[] = [];
     if (!this.baseUrl) missing.push("baseUrl");
     if (!this.apiKey) missing.push("apiKey");
-    if (!this.defaultModel) missing.push("defaultModel");
+    if (!this.model) missing.push("model");
     if (missing.length > 0) {
       console.error(`[WARN] Missing required config: ${missing.join(", ")}`);
       console.error(`       Edit ~/${SETTINGS_FILE} to set them.`);
