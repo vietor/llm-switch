@@ -167,12 +167,14 @@ const BLOCKED_HEADERS = new Set([
   "keep-alive",
   "transfer-encoding",
   "authorization",
+  "x-api-key",
 ]);
 
 class ProxyForwarder {
   private hostname: string;
   private port: number;
   private httpModule: typeof http | typeof https;
+  private basePath: string;
   private rewriteApiKey: string;
 
   constructor(baseUrl: string, apiKey: string) {
@@ -184,7 +186,19 @@ class ProxyForwarder {
         ? 443
         : 80;
     this.httpModule = url.protocol === "https:" ? https : http;
+    this.basePath =
+      url.pathname === "/" ? "" : url.pathname.replace(/\/+$/, "");
     this.rewriteApiKey = apiKey;
+  }
+
+  private resolvePath(path: string): string {
+    if (!this.basePath) return path;
+    const p = path.startsWith("/") ? path : "/" + path;
+    const lastSeg = this.basePath.split("/").filter(Boolean).pop();
+    if (lastSeg && (p === "/" + lastSeg || p.startsWith("/" + lastSeg + "/"))) {
+      return this.basePath + p.slice(lastSeg.length + 1);
+    }
+    return this.basePath + p;
   }
 
   pipe(
@@ -255,13 +269,16 @@ class ProxyForwarder {
       {
         hostname: this.hostname,
         port: this.port,
-        path,
+        path: this.resolvePath(path),
         method: req.method,
         headers: {
           ...this.filterHeaders(req.headers),
           "Content-Length": Buffer.byteLength(body).toString(),
           ...(this.rewriteApiKey
-            ? { Authorization: `Bearer ${this.rewriteApiKey}` }
+            ? {
+                Authorization: `Bearer ${this.rewriteApiKey}`,
+                "x-api-key": this.rewriteApiKey,
+              }
             : {}),
         },
       },
@@ -323,7 +340,7 @@ export class LLMBridge {
       return;
     }
 
-    if (url.startsWith("/responses") || url.startsWith("/v1/responses")) {
+    if (url.startsWith("/responses")) {
       let parsed: Record<string, unknown>;
       try {
         parsed = JSON.parse(raw);
@@ -338,7 +355,7 @@ export class LLMBridge {
         req,
         res,
         JSON.stringify(chatReq),
-        "/v1/chat/completions",
+        "/chat/completions",
         (rawResp) => JSON.stringify(chatToResponse(JSON.parse(rawResp))),
       );
     } else {
