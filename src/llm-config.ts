@@ -18,7 +18,7 @@ export class LLMConfig {
                 fs.readFileSync(path.join(os.homedir(), CONFIG_FILE), "utf-8"),
             );
         } catch { }
-        this.port = raw.port ?? 3000;
+        this.port = raw.port ?? 3456;
         this.baseUrl = raw.baseUrl ?? "";
         this.anthropicBaseUrl = raw.anthropicBaseUrl ?? "";
         this.apiKey = raw.apiKey ?? "";
