@@ -8,7 +8,7 @@
   "files": [
     "dist",
     "LICENSE",
-    "REAEME.md"
+    "README.md"
   ],
   "scripts": {
     "build": "tsc",
