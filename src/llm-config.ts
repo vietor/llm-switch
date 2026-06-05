@@ -12,13 +12,10 @@ export class LLMConfig {
   readonly model: string;
 
   constructor() {
-    const settingsPath = path.join(os.homedir(), SETTINGS_FILE);
     let cfg: Record<string, any> = {};
     try {
-      cfg = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
-    } catch {
-      // use defaults
-    }
+      cfg = JSON.parse(fs.readFileSync(path.join(os.homedir(), SETTINGS_FILE), "utf-8"));
+    } catch {}
     this.port = cfg.port ?? 3000;
     this.baseUrl = cfg.baseUrl ?? "";
     this.anthropicBaseUrl = cfg.anthropicBaseUrl ?? "";
@@ -27,13 +24,9 @@ export class LLMConfig {
   }
 
   validate(): void {
-    const missing: string[] = [];
-    if (!this.baseUrl) missing.push("baseUrl");
-    if (!this.apiKey) missing.push("apiKey");
-    if (!this.model) missing.push("model");
-    if (missing.length > 0) {
-      console.error(`[WARN] Missing required config: ${missing.join(", ")}`);
-      console.error(`       Edit ~/${SETTINGS_FILE} to set them.`);
+    const missing = ["baseUrl", "apiKey", "model"].filter(k => !(this as Record<string, any>)[k]);
+    if (missing.length) {
+      console.error(`[WARN] Missing required config: ${missing.join(", ")}\n       Edit ~/${SETTINGS_FILE} to set them.`);
       process.exit(1);
     }
   }
