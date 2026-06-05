@@ -1,6 +1,5 @@
 import http from "node:http";
 import https from "node:https";
-import zlib from "node:zlib";
 
 import { LLMConfig } from "./llm-config.js";
 
@@ -8,6 +7,15 @@ const BLOCKED_HEADERS = new Set([
   "host", "content-length", "connection", "keep-alive",
   "accept-encoding", "transfer-encoding", "authorization", "x-api-key",
 ]);
+
+function textContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((p): p is Record<string, unknown> => typeof p === "object" && p !== null && p.type === "text")
+    .map(p => p.text as string)
+    .join("\n");
+}
 
 function rewriteAnthropic(raw: string): string | null {
   let body: Record<string, unknown>;
@@ -21,15 +29,7 @@ function rewriteAnthropic(raw: string): string | null {
 
   for (const msg of messages) {
     if (msg && typeof msg === "object" && (msg as Record<string, unknown>).role === "system") {
-      const content = (msg as { content: unknown }).content;
-      systemParts.push(
-        typeof content === "string" ? content
-          : Array.isArray(content) ? content
-              .filter((p): p is Record<string, unknown> => typeof p === "object" && p !== null && p.type === "text")
-              .map(p => p.text as string)
-              .join("\n")
-          : ""
-      );
+      systemParts.push(textContent((msg as { content: unknown }).content));
     } else {
       cleaned.push(msg);
     }
@@ -41,7 +41,9 @@ function rewriteAnthropic(raw: string): string | null {
     if (typeof body.system === "string" && body.system) {
       systemParts.unshift(body.system);
     } else if (Array.isArray(body.system)) {
-      systemParts.unshift(...body.system.filter((s): s is string => typeof s === "string"));
+      for (const s of body.system) {
+        if (typeof s === "string") systemParts.unshift(s);
+      }
     }
   }
 
@@ -71,10 +73,9 @@ function requestToChat(body: Record<string, unknown>): Record<string, unknown> {
 }
 
 function chatToResponse(chat: Record<string, unknown>): Record<string, unknown> {
-  const choices = chat.choices as Record<string, unknown>[] | undefined;
+  const message = (chat.choices as Record<string, unknown>[] | undefined)?.[0]?.message as Record<string, unknown> | undefined;
   const output: Record<string, unknown>[] = [];
 
-  const message = choices?.[0]?.message as Record<string, unknown> | undefined;
   if (message) {
     const content: Record<string, unknown>[] = [];
     if (message.content) content.push({ type: "output_text", text: message.content, annotations: [] });
@@ -90,6 +91,36 @@ function chatToResponse(chat: Record<string, unknown>): Record<string, unknown> 
   }
 
   return { id: chat.id, object: "response", created_at: chat.created, status: "completed", model: chat.model, output, usage: chat.usage };
+}
+
+function sse(res: http.ServerResponse, event: string, data: unknown): void {
+  res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+function buildDone(id: string, model: string, content: string, finishReason: string, usage: unknown) {
+  return {
+    type: "response.done",
+    response: {
+      id: id || `resp_${Date.now()}`,
+      created_at: Math.floor(Date.now() / 1000),
+      status: finishReason === "stop" ? "completed" : "incomplete",
+      model: model || "",
+      output: content ? [{
+        type: "message", id: `msg_${id || Date.now()}`,
+        status: "completed", role: "assistant",
+        content: [{ type: "output_text", text: content, annotations: [] }],
+      }] : [],
+      usage: usage || null,
+    },
+  };
+}
+
+function setModel(body: string, model: string): string {
+  try {
+    const parsed = JSON.parse(body);
+    parsed.model = model;
+    return JSON.stringify(parsed);
+  } catch { return body; }
 }
 
 class ProxyForwarder {
@@ -118,7 +149,7 @@ class ProxyForwarder {
     return this.basePath + p;
   }
 
-  private request(
+  send(
     method: string,
     path: string,
     headers: http.IncomingHttpHeaders,
@@ -133,6 +164,7 @@ class ProxyForwarder {
       }
     }
     hdrs.host = this.hostname;
+    hdrs["accept-encoding"] = "identity";
     hdrs["Content-Length"] = Buffer.byteLength(body).toString();
     if (this.rewriteApiKey) {
       hdrs.Authorization = `Bearer ${this.rewriteApiKey}`;
@@ -149,18 +181,14 @@ class ProxyForwarder {
   }
 
   pipe(req: http.IncomingMessage, res: http.ServerResponse, body: string, path: string): void {
-    this.request(req.method!, path, req.headers, body, (proxyRes) => {
-      const headers: Record<string, string | string[]> = {};
-      for (const [k, v] of Object.entries(proxyRes.headers)) {
-        if (k.toLowerCase() !== "content-encoding" && v !== undefined) headers[k] = v;
-      }
-      res.writeHead(proxyRes.statusCode ?? 502, headers);
+    this.send(req.method!, path, req.headers, body, (proxyRes) => {
+      res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
       proxyRes.pipe(res);
     }, (err) => { res.writeHead(502).end(`Proxy error: ${err.message}`); });
   }
 
   buffer(req: http.IncomingMessage, res: http.ServerResponse, body: string, path: string, onSuccess: (raw: string) => string): void {
-    this.request(req.method!, path, req.headers, body, (proxyRes) => {
+    this.send(req.method!, path, req.headers, body, (proxyRes) => {
       const statusCode = proxyRes.statusCode ?? 502;
       const chunks: Buffer[] = [];
       proxyRes.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -171,24 +199,6 @@ class ProxyForwarder {
       });
     }, (err) => { res.writeHead(502).end(`Proxy error: ${err.message}`); });
   }
-
-  raw(
-    req: http.IncomingMessage,
-    body: string,
-    path: string,
-    onResponse: (proxyRes: http.IncomingMessage) => void,
-    onError: (err: Error) => void,
-  ): void {
-    this.request(req.method!, path, req.headers, body, onResponse, onError);
-  }
-}
-
-function setModel(body: string, model: string): string {
-  try {
-    const parsed = JSON.parse(body);
-    parsed.model = model;
-    return JSON.stringify(parsed);
-  } catch { return body; }
 }
 
 export class LLMBridge {
@@ -218,33 +228,25 @@ export class LLMBridge {
     if (this.rewriteModel) chatReq.model = this.rewriteModel;
     const bodyStr = JSON.stringify(chatReq);
 
-    this.forwarder.raw(req, bodyStr, "/chat/completions",
+    this.forwarder.send(req.method!, "/chat/completions", req.headers, bodyStr,
       (proxyRes) => {
-        const statusCode = proxyRes.statusCode ?? 200;
-        if (statusCode >= 400) {
+        if ((proxyRes.statusCode ?? 200) >= 400) {
           const chunks: Buffer[] = [];
           proxyRes.on("data", (chunk: Buffer) => chunks.push(chunk));
-          proxyRes.on("end", () => { res.writeHead(statusCode, { "Content-Type": "application/json" }); res.end(Buffer.concat(chunks).toString()); });
+          proxyRes.on("end", () => { res.writeHead(proxyRes.statusCode!, { "Content-Type": "application/json" }); res.end(Buffer.concat(chunks).toString()); });
           return;
         }
 
         res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
 
         let responseId = "", responseModel = "", fullContent = "", buffer = "";
+        proxyRes.setEncoding("utf-8");
 
-        const contentEncoding = proxyRes.headers["content-encoding"] as string | undefined;
-        const stream: http.IncomingMessage | zlib.Gunzip | zlib.Inflate = contentEncoding?.includes("gzip")
-          ? proxyRes.pipe(zlib.createGunzip())
-          : contentEncoding?.includes("deflate")
-            ? proxyRes.pipe(zlib.createInflate())
-            : proxyRes;
-        stream.setEncoding("utf-8");
-
-        stream.on("error", (err) => {
-          if (!res.writableEnded) { res.write(`event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`); res.end(); }
+        proxyRes.on("error", (err) => {
+          if (!res.writableEnded) { sse(res, "error", { error: err.message }); res.end(); }
         });
 
-        stream.on("data", (chunk: string) => {
+        proxyRes.on("data", (chunk: string) => {
           buffer += chunk;
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";
@@ -267,33 +269,18 @@ export class LLMBridge {
 
               if (content) {
                 fullContent += content;
-                res.write(`event: response.output_text.delta\ndata: ${JSON.stringify({ type: "response.output_text.delta", delta: content, index: 0 })}\n\n`);
+                sse(res, "response.output_text.delta", { type: "response.output_text.delta", delta: content, index: 0 });
               }
 
               const finishReason = choices[0].finish_reason as string | null | undefined;
               if (finishReason === "stop" || finishReason === "length") {
-                res.write(`event: response.done\ndata: ${JSON.stringify({
-                  type: "response.done",
-                  response: {
-                    id: responseId || `resp_${Date.now()}`,
-                    object: "response",
-                    created_at: Math.floor(Date.now() / 1000),
-                    status: finishReason === "stop" ? "completed" : "incomplete",
-                    model: responseModel || "",
-                    output: fullContent ? [{
-                      type: "message", id: `msg_${responseId || Date.now()}`,
-                      status: "completed", role: "assistant",
-                      content: [{ type: "output_text", text: fullContent, annotations: [] }],
-                    }] : [],
-                    usage: parsed.usage || null,
-                  },
-                })}\n\n`);
+                sse(res, "response.done", buildDone(responseId, responseModel, fullContent, finishReason, parsed.usage));
               }
             } catch {}
           }
         });
 
-        stream.on("end", () => { if (!res.writableEnded) res.end(); });
+        proxyRes.on("end", () => { if (!res.writableEnded) res.end(); });
       },
       (err) => { if (!res.writableEnded) { res.writeHead(502).end(`Proxy error: ${err.message}`); } },
     );

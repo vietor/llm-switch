@@ -24,10 +24,12 @@ export class LLMConfig {
   }
 
   validate(): void {
-    const missing = ["baseUrl", "apiKey", "model"].filter(k => !(this as Record<string, any>)[k]);
-    if (missing.length) {
-      console.error(`[WARN] Missing required config: ${missing.join(", ")}\n       Edit ~/${SETTINGS_FILE} to set them.`);
-      process.exit(1);
-    }
+    const missing: string[] = [];
+    if (!this.baseUrl) missing.push("baseUrl");
+    if (!this.apiKey) missing.push("apiKey");
+    if (!this.model) missing.push("model");
+    if (!missing.length) return;
+    console.error(`[WARN] Missing required config: ${missing.join(", ")}\n       Edit ~/${SETTINGS_FILE} to set them.`);
+    process.exit(1);
   }
 }
