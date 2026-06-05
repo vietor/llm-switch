@@ -1,6 +1,6 @@
 {
   "name": "@vietor/llm-switch",
-  "version": "0.9.1-rc1",
+  "version": "0.9.1-rc2",
   "description": "Local HTTP proxy that forwards LLM requests with format conversion and model override",
   "bin": {
     "llm-switch": "dist/index.js"
@@ -23,7 +23,7 @@
     "deepseek"
   ],
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "^18.0.0",
     "typescript": "^5.7.0"
   },
   "license": "MIT",
@@ -37,6 +37,6 @@
     "url": "https://github.com/vietor/llm-switch/issues"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=18.0.0"
   }
 }

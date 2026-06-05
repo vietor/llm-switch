@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 import { LLMConfig } from "./llm-config.js";
 import { LLMBridge } from "./llm-bridge.js";
 
