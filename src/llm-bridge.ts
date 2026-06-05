@@ -306,14 +306,18 @@ export class LLMBridge {
           (rawResp) => JSON.stringify(chatToResponse(JSON.parse(rawResp))));
       }
     } else {
+      let path = url;
       let body = raw;
       let forwarder: ProxyForwarder = this.forwarder;
       if (url.startsWith("/anthropic")) {
         body = rewriteAnthropic(raw) ?? raw;
-        if (this.anthropicForwarder) forwarder = this.anthropicForwarder;
+        if (this.anthropicForwarder) {
+          path = url.substring(10);
+          forwarder = this.anthropicForwarder;
+        }
       }
       if (this.rewriteModel) body = setModel(body, this.rewriteModel);
-      forwarder.pipe(req, res, body, url);
+      forwarder.pipe(req, res, body, path);
     }
   }
 }
