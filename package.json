@@ -1,6 +1,6 @@
 {
   "name": "@vietor/llm-switch",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "description": "Local HTTP proxy that forwards LLM requests with format conversion and model override",
   "bin": {
     "llm-switch": "dist/index.js"
