@@ -25,7 +25,7 @@ export class LLMConfig {
         this.model = raw.model ?? "";
     }
 
-    exitIfInvalid(): void {
+    validateOrExit(): void {
         const missing: string[] = [];
         if (!this.baseUrl) missing.push("baseUrl");
         if (!this.apiKey) missing.push("apiKey");

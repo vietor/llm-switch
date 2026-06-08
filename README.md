@@ -69,25 +69,9 @@ curl http://localhost:3456/anthropic/v1/messages \
 
 If `anthropicBaseUrl` is configured, requests to `/anthropic/*` are forwarded there with the `/anthropic` prefix stripped (e.g. `/anthropic/v1/messages` → `{anthropicBaseUrl}/v1/messages`).
 
-### OpenAI Responses API (`/responses`)
-
-Converts OpenAI Responses API format to Chat Completions before forwarding. Supports both non-streaming and streaming responses.
-
-```bash
-curl http://localhost:3456/responses \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "ignored",
-    "input": "Hello"
-  }'
-```
-
-For streaming, add `"stream": true` — the proxy converts the upstream Chat Completions SSE stream into Responses API SSE events (`response.output_text.delta`, `response.done`).
-
 ## How it works
 
 All requests go through these transformations:
 
-1. **Format conversion** — Anthropic SDK and Responses API formats are converted to Chat Completions format
-2. **Model override** — The `model` field in every outgoing request is replaced with the configured value
-3. **Forwarding** — The converted request is sent to the upstream API and the response is passed back, with reverse conversion for Responses API responses
+1. **Model override** — The `model` field in every outgoing request is replaced with the configured value
+2. **Forwarding** — The request is sent to the upstream API and the response is passed back

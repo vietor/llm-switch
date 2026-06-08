@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 
 import { LLMConfig } from "./llm-config.js";
-import { LLMBridge } from "./llm-bridge.js";
+import { LLMProxy } from "./llm-proxy.js";
 
 const config = new LLMConfig();
-config.exitIfInvalid();
+config.validateOrExit();
 
-const bridge = new LLMBridge(config);
-const server = bridge.createServer();
+const proxy = new LLMProxy(config);
+const server = proxy.createServer();
 server.listen(config.port, () => {
     console.log(`Running on http://localhost:${config.port}`);
 });
